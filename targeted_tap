@@ -1,0 +1,161 @@
+#!/usr/bin/make -rRf
+
+# April 10
+# Take singel bam as imput
+# pavfinder in debug mode
+# fix couple bugs
+
+# [modified] Feb 10, 2015
+# use bbt_2.0.8 with -i variable
+# modified targeted_tap so that
+# it will take a list of bloom filter and generator filtered reads for each gene
+# [usage] add input variable: filter_list = <>
+
+# modified by Yi-Ming Sun 
+# created by Readman Chiu
+# at BCGSC
+ifndef sample
+error::
+	@>&2 echo 'tap: missing parameter `sample`'
+endif
+
+SHELL := /bin/bash -eu -o pipefail
+
+.DELETE_ON_ERROR:
+
+.ONESHELL:
+
+tap_outdir = $(outdir)/tTAP_v$(VERSION)
+# biobloom_outdir
+biobloom_outdir = $(tap_outdir)/biobloom_v$(BBT_VERSION)
+assembly_outdir = $(tap_outdir)/trans-abyss_v$(TRANSABYSS_VERSION)
+pavfinder_outdir = $(tap_outdir)/pavfinder_v$(PAVFINDER_VERSION)
+self_dir := $(dir $(lastword $(MAKEFILE_LIST)))
+
+# list input files
+ifdef reads1_list
+  input1 = $(shell cat $(reads1_list))
+  firstinput1 = $(firstword $(input1))
+endif
+ifdef reads2_list
+  input2 = $(shell cat $(reads2_list))
+  firstinput2 = $(firstword $(input2))
+endif
+
+# single input file
+ifdef reads1
+  seq1 = $(reads1)
+endif
+
+ifdef reads2
+  seq2 = $(reads2)
+endif
+
+# added another if condition to avoid empty cat
+ifeq ($(suffix $(firstinput1)), .gz)
+  seq1 = <(zcat $(input1))
+else ifeq ($(suffix $(firstinput1)), .bz2)
+  seq1 = <(bzcat $(input1))
+else
+  ifdef input1
+    seq1 = <(cat $(input1))
+  endif
+endif
+
+ifeq ($(suffix $(firstinput2)), .gz)
+  seq2 = <(zcat $(input2))
+else ifeq ($(suffix $(firstinput2)), .bz2)
+  seq2 = <(bzcat $(input2))
+else
+  ifdef input2
+    seq2 = <(cat $(input2))
+  endif
+endif
+
+#stand specific
+ifdef ss
+  SS = --SS
+else
+  SS = 
+endif
+
+ifdef filter_list
+  filter := $(shell cat $(filter_list))
+  gene_list := $(foreach f, $(filter), $(shell basename $(f) .bf))
+  bbt_fqs := $(foreach gene, $(gene_list), $(biobloom_outdir)/$(sample)_$(gene)_1.fq.gz $(biobloom_outdir)/$(sample)_$(gene)_2.fq.gz) \
+		$(biobloom_outdir)/$(sample)_multiMatch_1.fq.gz \
+		$(biobloom_outdir)/$(sample)_multiMatch_2.fq.gz
+else 
+  bbt_fqs := $(biobloom_outdir)/$(sample)_1.fq.gz $(biobloom_outdir)/$(sample)_2.fq.gz
+endif
+
+prefixes = $(foreach kk,$(k),k$(kk).)
+k_contigs = $(foreach kk,$(k),$(assembly_outdir)/k$(kk)/$(sample)-final.fa)
+min_k = $(firstword $(k))
+max_k = $(lastword $(k))
+
+# change permission
+DONE : $(pavfinder_outdir)/events.tsv
+	chmod -R g+w $(tap_outdir)/*
+
+# pavfinder
+$(pavfinder_outdir)/events.tsv : $(tap_outdir)/c2g.bam $(tap_outdir)/r2c_sorted.bam $(tap_outdir)/r2c_sorted.bam.bai
+	mkdir -p $(pavfinder_outdir); \
+	source $(self_dir)/pavfinder_profile.sh && \
+	time pavfinder transcriptome $(tap_outdir)/c2g.bam gmap $(assembly_outdir)/$(sample)-merged.fa $(GENES) $(GENOME_PATH) $(pavfinder_outdir) -G $(GMAPDB_PATH) -g $(GENOME) -b $(tap_outdir)/r2c_sorted.bam -t 4 --sort_by_event_type --debug > $(pavfinder_outdir)/tmp.txt
+
+# c2g
+$(tap_outdir)/c2g.bam : $(assembly_outdir)/$(sample)-merged.fa
+	source $(self_dir)/pavfinder_profile.sh && \
+	time gmap -d $(GENOME) -D $(GMAPDB_PATH) $(assembly_outdir)/$(sample)-merged.fa -t $(NUM_THREADS) -f samse | egrep '^[@k]' > $(tap_outdir)/c2g.sam && \
+	samtools view -bhS $(tap_outdir)/c2g.sam -o $(tap_outdir)/c2g.bam && \
+	rm $(tap_outdir)/c2g.sam
+
+# r2c
+$(tap_outdir)/r2c_sorted.bam $(tap_outdir)/r2c_sorted.bam.bai : \
+		$(assembly_outdir)/$(sample)-merged.fa $(bbt_fqs)
+	source $(self_dir)/pavfinder_profile.sh && \
+	time bwa index $(assembly_outdir)/$(sample)-merged.fa && \
+	time bwa mem -t $(NUM_THREADS) $(assembly_outdir)/$(sample)-merged.fa <(zcat $(bbt_fqs)) | samtools view -bhS - -o $(tap_outdir)/r2c.bam && \
+	time samtools sort -m $(MAX_MEM) -n $(tap_outdir)/r2c.bam $(tap_outdir)/r2c_ns && \
+	time samtools fixmate $(tap_outdir)/r2c_ns.bam $(tap_outdir)/r2c_fm.bam && \
+	time samtools sort -m $(MAX_MEM) $(tap_outdir)/r2c_fm.bam $(tap_outdir)/r2c_sorted && \
+	time samtools index $(tap_outdir)/r2c_sorted.bam && \
+	rm $(assembly_outdir)/$(sample)-merged.fa.sa \
+		$(assembly_outdir)/$(sample)-merged.fa.amb \
+		$(assembly_outdir)/$(sample)-merged.fa.ann \
+		$(assembly_outdir)/$(sample)-merged.fa.bwt \
+		$(assembly_outdir)/$(sample)-merged.fa.pac \
+		$(tap_outdir)/r2c.bam \
+		$(tap_outdir)/r2c_ns.bam \
+		$(tap_outdir)/r2c_fm.bam
+
+# merge
+$(assembly_outdir)/$(sample)-merged.fa : $(k_contigs)
+	source $(self_dir)/transabyss_profile.sh && \
+	time transabyss-merge $(SS) --threads $(NUM_THREADS) \
+	--mink $(min_k) --maxk $(max_k) \
+	--prefixes $(prefixes) --length $(readlen) $(k_contigs) \
+	--out $(assembly_outdir)/$(sample)-merged.fa --force
+
+# transAbyss assemble
+$(assembly_outdir)/k%/$(sample)-final.fa : $(bbt_fqs)
+	source $(self_dir)/transabyss_profile.sh && \
+	time transabyss $(SS) --kmer $* --pe $(bbt_fqs) --cleanup 3 \
+	--outdir $(assembly_outdir)/k$* --name $(sample) --threads $(NUM_THREADS)
+
+# biobloomcategorizer
+$(bbt_fqs) : $(input1) $(input2) $(filter)
+ifdef filter_list
+	mkdir -p $(biobloom_outdir)
+	source $(self_dir)/biobloom_profile.sh && \
+	time biobloomcategorizer -p $(biobloom_outdir)/$(sample) -e -i --fq -g \
+	-t $(NUM_THREADS) -f "$(filter)" $(seq1) $(seq2)
+else
+	mkdir -p $(biobloom_outdir)	
+	source $(self_dir)/biobloom_profile.sh && \
+	time biobloomcategorizer -p $(biobloom_outdir)/$(sample) \
+	-d $(shell basename $(filter) .bf) -e -i \
+	-t $(NUM_THREADS) -f $(filter) $(seq1) $(seq2) | \
+	fastq_split.py -p $(biobloom_outdir)/$(sample) -g -f
+endif
