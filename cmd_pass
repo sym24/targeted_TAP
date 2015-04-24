@@ -1,0 +1,7 @@
+
+# sample usage. Note 
+source /projects/btl/ymingsun/multibf_tTAP/centos5/tap_profile.sh;time /projects/btl/ymingsun/multibf_tTAP/centos5/targeted_tap k='32 52 72' readlen=74 reads1=/projects/btl/ymingsun/test_library/A10000_1.fq.gz reads2=/projects/btl/ymingsun/test_library/A10000_2.fq.gz outdir=./multi_bf_tTap filter_list=/home/ymingsun/work/seqExtract/multibf/trans_geno/jan30/bf_files/listfiter.txt
+
+
+# Process tsv file
+cat events.tsv | tr "\t" "~" | cut -d"~" -f2
