@@ -1,0 +1,82 @@
+#!/usr/bin/make -rRf
+
+ifndef sample
+error::
+	@>&2 echo 'tap: missing parameter `sample`'
+endif
+
+
+SHELL = /bin/bash -eu -o pipefail
+
+.DELETE_ON_ERROR:
+
+.ONESHELL:
+
+tap_outdir = $(outdir)/TAP_v$(VERSION)
+assembly_outdir = $(tap_outdir)/trans-abyss_v$(TRANSABYSS_VERSION)
+pavfinder_outdir = $(tap_outdir)/pavfinder_v$(PAVFINDER_VERSION)
+self_dir := $(dir $(lastword $(MAKEFILE_LIST)))
+ifdef ss
+	SS = --SS
+else
+	SS = 
+endif
+
+# reads
+ifdef reads1_list
+	reads1 = $(shell cat $(reads1_list))
+endif
+ifdef reads2_list
+	reads2 = $(shell cat $(reads2_list))
+endif
+
+prefixes = $(foreach kk,$(k),k$(kk).)
+k_contigs = $(foreach kk,$(k),$(assembly_outdir)/k$(kk)/$(sample)-final.fa) 
+min_k = $(firstword $(k))
+max_k = $(lastword $(k))
+
+# change permission
+DONE : $(pavfinder_outdir)/events.tsv
+	chmod -R g+w $(tap_outdir)/*
+
+# pavfinder
+$(pavfinder_outdir)/events.tsv : $(tap_outdir)/c2g.bam $(tap_outdir)/r2c_sorted.bam $(tap_outdir)/r2c_sorted.bam.bai 
+	mkdir -p $(pavfinder_outdir); \
+	source $(self_dir)/pavfinder_profile.sh && \
+	time pavfinder transcriptome $(tap_outdir)/c2g.bam gmap $(assembly_outdir)/$(sample)-merged.fa $(GENES) $(GENOME_PATH) $(pavfinder_outdir) -G $(GMAPDB_PATH) -g $(GENOME) -b $(assembly_outdir)/reads_to_contigs/r2c.bam --multimapped -t 4 --sort_by_event_type
+
+# c2g
+$(tap_outdir)/c2g.bam : $(assembly_outdir)/$(sample)-merged.fa
+	source $(self_dir)/pavfinder_profile.sh && \
+	gmap -d $(GENOME) -D $(GMAPDB_PATH) $(assembly_outdir)/$(sample)-merged.fa -t $(NUM_THREADS) -f samse | egrep '^[@k]' > $(tap_outdir)/c2g.sam && \
+	samtools view -bhS $(tap_outdir)/c2g.sam -o $(tap_outdir)/c2g.bam && \
+	rm $(tap_outdir)/c2g.sam
+
+# r2c
+$(tap_outdir)/r2c_sorted.bam $(tap_outdir)/r2c_sorted.bam.bai : $(assembly_outdir)/$(sample)-merged.fa $(tmp_reads1) $(tmp_reads2)
+	source $(self_dir)/pavfinder_profile.sh && \
+	time bwa index $(assembly_outdir)/$(sample)-merged.fa && \
+	time bwa mem -t $(NUM_THREADS) $(assembly_outdir)/$(sample)-merged.fa <(zcat $(tmp_reads1) $(tmp_reads2)) | samtools view -bhS - -o $(tap_outdir)/r2c.bam && \
+	time samtools sort -m $(MAX_MEM) -n $(tap_outdir)/r2c.bam $(tap_outdir)/r2c_ns && \
+	time samtools fixmate $(tap_outdir)/r2c_ns.bam $(tap_outdir)/r2c_fm.bam && \
+	time samtools sort -m $(MAX_MEM) $(tap_outdir)/r2c_fm.bam $(tap_outdir)/r2c_sorted && \
+	time samtools index $(tap_outdir)/r2c_sorted.bam && \
+	rm $(assembly_outdir)/$(sample)-merged.fa.sa \
+		$(assembly_outdir)/$(sample)-merged.fa.amb \
+		$(assembly_outdir)/$(sample)-merged.fa.ann \
+		$(assembly_outdir)/$(sample)-merged.fa.bwt \
+		$(assembly_outdir)/$(sample)-merged.fa.pac \
+		$(tap_outdir)/r2c.bam \
+		$(tap_outdir)/r2c_ns.bam \
+		$(tap_outdir)/r2c_fm.bam
+
+# merge
+$(assembly_outdir)/$(sample)-merged.fa : $(k_contigs)
+	source $(self_dir)/transabyss_profile.sh && \
+	transabyss-merge $(SS) --threads $(NUM_THREADS) --mink $(min_k) --maxk $(max_k) --prefixes $(prefixes) --length $(readlen) $(k_contigs) --out $(assembly_outdir)/$(sample)-merged.fa --force
+
+# assemble
+$(assembly_outdir)/k%/$(sample)-final.fa : $(reads1) $(reads2)
+	source $(self_dir)/transabyss_profile.sh && \
+	transabyss $(SS) --kmer $* --pe $(reads1) $(reads2) --outdir $(assembly_outdir)/k$* --name $(sample) --threads $(NUM_THREADS);
+
