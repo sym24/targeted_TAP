@@ -1,0 +1,10 @@
+export VERSION=0.2.2
+export NUM_THREADS=12
+export BBT_VERSION=2.0.11b
+export TRANSABYSS_VERSION=1.5.2
+export PAVFINDER_VERSION=0.1.0
+export GENOME=hg19
+export GENOME_PATH=/projects/btl/trans-abyss/public_releases/v1.4.8/annotations/hg19/hg19.fa
+export GENES=/projects/clingenetics/reference_data_sets/RefSeq/bgzip_tabix/refseq_hg19.refGene.genePred.utr_cds.sorted.2014-08-21.gtf.gz
+export GMAPDB_PATH=/projects/btl/arch/gmapdb_sarray/hg19
+export MAX_MEM=10000000000
