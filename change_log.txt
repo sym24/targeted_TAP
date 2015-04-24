@@ -1,0 +1,14 @@
+- added BBT_VERSION to "tap_profile.sh"
+- added "biobloom_profile.sh" - specify path of biobloom, "fastq_split.py" in $BIN_PATH, and PYTHONPATH
+- changed output directory to 'tTAP_v0.2.0'
+- biobloomcategorizer and fastq_split.py should be in PATH by sourcing biobloom_profile.sh
+- added "time" in front of every command
+- original make file from Yi-Ming: /home/ymingsun/work/targetedTAP/centos5/targetedTAP
+- make sure biobloomcategorizer and fastq_split.py are copied
+- changed --end_to_end to --local for Bowtie2
+
+[modified by Yi-Ming Sun on Feb3]
+- add variable "filter_list = <.txt>" to take multiple bloom filter files
+- still support single filter. Old functions remain the same
+- sample output files in directory single_bf_tTap multi_bf_tTap
+- sample cmd is in cmd_pass
